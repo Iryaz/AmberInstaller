@@ -1,0 +1,10 @@
+release/*
+debug/*
+AmberInstaller.pro.user
+object_*
+ui_mainwidget.h
+Makefile
+Makefile.Release
+Makefile.Debug
+.qmake.stash
+amberinstaller_plugin_import.cpp
