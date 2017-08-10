@@ -3,7 +3,7 @@
 #include <QDebug>
 #include <QDir>
 
-ZipFile::ZipFile()
+ZipFile::ZipFile(QObject *parent) : QThread(parent)
 {
 }
 
@@ -11,7 +11,7 @@ ZipFile::~ZipFile()
 {
 }
 
-bool ZipFile::open(QString fileName)
+bool ZipFile::open(const QString& fileName)
 {
     return open(fileName.toStdString().data());
 }
@@ -26,7 +26,21 @@ bool ZipFile::open(const char *fileName)
     return true;
 }
 
-void ZipFile::extracting(QString zipFile, QString targetDir, QString password)
+void ZipFile::run()
+{
+    extracting_(zipFile_, targetDir_, password_);
+}
+
+void ZipFile::extracting(const QString &zipFile, const QString &targetDir, const QString &password)
+{
+    setFileName(zipFile);
+    setTargetDir(targetDir);
+    setPassword(password);
+
+    start();
+}
+
+void ZipFile::extracting_(const QString &zipFile, const QString &targetDir, const QString &password)
 {
     if (open(zipFile)) {
         for (int i = 0; i < zip_get_num_entries(za, 0); i++) {
@@ -63,25 +77,37 @@ void ZipFile::extracting(QString zipFile, QString targetDir, QString password)
     }
 }
 
-uint64_t ZipFile::saveFile(QString targetDir, zip_file *file, struct zip_stat *stat)
+uint64_t ZipFile::saveFile(const QString &targetDir, zip_file *file, struct zip_stat *stat)
 {
+    int writeByte = 0;
+    uint_fast8_t* fileBuffer = NULL;
+
+    try {
+        fileBuffer = new uint8_t[stat->size];
+    }
+    catch (std::bad_alloc) {
+        // Если память для файла выделить не получилось, то для него возвращается
+        // статус не успешно !!! и он на диск не записывается
+        qDebug () << CLASS << "Bad alloc !!!" << " " << "Size buffer: " << stat->size;
+        return 0;
+    }
+
     FILE *fd = fopen((targetDir + "/" + QString(stat->name)).toStdString().data(), "wb");
     if (!fd) {
         qDebug() << CLASS << "Error create file - " << stat->name;
         return 0;
     }
 
-    uint_fast8_t* fileBuffer = new uint8_t[stat->size];
     zip_fread(file, fileBuffer, stat->size);
-    int writeByte = fwrite(fileBuffer, sizeof(uint_fast8_t), stat->size, fd);
-
+    writeByte = fwrite(fileBuffer, sizeof(uint_fast8_t), stat->size, fd);
     fclose(fd);
+
     delete[] fileBuffer;
 
     return writeByte;
 }
 
-QString ZipFile::Status2String(EXTRACTING_STATUS s)
+QString ZipFile::Status2String(int s)
 {
     QString ret = tr("OK");
     switch (s) {

@@ -8,3 +8,4 @@ Makefile.Release
 Makefile.Debug
 .qmake.stash
 amberinstaller_plugin_import.cpp
+Video.zip

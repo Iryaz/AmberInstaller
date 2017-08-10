@@ -2,10 +2,11 @@
 #include "ui_mainwidget.h"
 
 #include <QDebug>
-#include <QTime>
 #include <QDir>
-#include <QThread>
 #include <QProcess>
+#include <QMessageBox>
+#include <QTime>
+#include <QThread>
 
 MainWidget::MainWidget(QWidget *parent) :
     QWidget(parent),
@@ -13,11 +14,15 @@ MainWidget::MainWidget(QWidget *parent) :
 {
     ui->setupUi(this);
     setWindowFlags(Qt::Dialog);
-    setFixedSize(QSize(500, 450));
+    setFixedSize(QSize(WINDOW_WIDTH, WINDOW_HEIGHT));
     ui->bannerLabel->setVisible(true);
     ui->logWidget->setVisible(false);
     ui->dirLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    connect(ui->extractButton, SIGNAL(clicked()), this, SLOT(extractArchive()));
+
+    zipThread = new ZipFile(this);
+    copyFileThread = new FileClonerThread(this);
+
+    connect(ui->extractButton, SIGNAL(clicked()), this, SLOT(begin()));
     qsrand(QTime(0,0,0).secsTo(QTime::currentTime()));
 }
 
@@ -26,7 +31,18 @@ MainWidget::~MainWidget()
     delete ui;
 }
 
-void MainWidget::extractArchive()
+void MainWidget::closeEvent(QCloseEvent *event)
+{
+    if (zipThread->isRunning() || copyFileThread->isRunning()) {
+        if (QMessageBox::question(this, "Exit?",
+                                  "Do you want to terminate the decompression?") == QMessageBox::Yes)
+            event->accept();
+        else
+            event->ignore();
+    }
+}
+
+void MainWidget::begin()
 {
     ui->bannerLabel->setVisible(false);
     ui->logWidget->setVisible(true);
@@ -38,22 +54,66 @@ void MainWidget::extractArchive()
     else
         qDebug() << "Error create TMP directory!!!";
 
-    QFile archiveFile(":/" + QString(GAME_ARCHIVE));
+    QString archiveFile(":/" + QString(GAME_ARCHIVE));
+    //QString archiveFile("./" + QString("Video.zip"));
     QString TARGET_FILE = TMP_DIR + QDir::separator() + QString(GAME_ARCHIVE);
-    if (archiveFile.copy(TARGET_FILE))
-        qDebug() << "Create game archive success!!!: " + TARGET_FILE;
-    else
-        qDebug() << "Error create game archive!!!: " + TARGET_FILE;
+    ui->logWidget->addItem(tr("Copying an archive"));
 
-    ZipFile zip;
-    connect(&zip, SIGNAL(beginExtractFile(QString*)), this, SLOT(addExtractFileInLog(QString*)));
-    connect(&zip, SIGNAL(fileExtract(QString*, ZipFile::EXTRACTING_STATUS)),
-            this, SLOT(extractFileFinish(QString*, ZipFile::EXTRACTING_STATUS)));
+    // После копирования архива, распаковать его в этой же директории
+    connect(copyFileThread, SIGNAL(finished()), this, SLOT(extractArchive()));
+
+    setStatusText("Copy zip archive to TMP_DIR");
+
+    // Скопировать архив во временную директорию в отдельном потоке
+    copyFileThread->copyFile(archiveFile, TARGET_FILE);
+}
+
+void MainWidget::setStatusText(const QString& statusText)
+{
+    setWindowTitle(QString(PROGRAM_TITLE) + " " + statusText);
+}
+
+void MainWidget::extractArchive()
+{
+    if (copyFileThread->getStatus() == FILE_COPY_OK)
+        qDebug() << "Create game archive success!!!: " + copyFileThread->getDstFileName();
+    else
+        qDebug() << "Error create game archive!!!: " + copyFileThread->getDstFileName();
+
+    QString itemText = ui->logWidget->item(ui->logWidget->count()-1)->text();
+    ui->logWidget->item(ui->logWidget->count()-1)->setText(itemText + " ------> " +
+                                          FileClonerThread::Status2String(copyFileThread->getStatus()));
+    ui->logWidget->item(ui->logWidget->count()-1)->setToolTip(TMP_DIR + QDir::separator() + GAME_ARCHIVE);
+
+    switch (copyFileThread->getStatus()) {
+    case FILE_COPY_OK:
+        ui->logWidget->item(ui->logWidget->count()-1)->setForeground(Qt::darkGreen);
+        break;
+    case FILE_COPY_FAILED:
+        ui->logWidget->item(ui->logWidget->count()-1)->setForeground(Qt::red);
+        break;
+    }
+
+    // После распаковки всех файлов запустить exe файл игры
+    connect(zipThread, SIGNAL(finished()), this, SLOT(startGame()));
+    // Перед распаковкой файла в архиве, занести его имя в список
+    connect(zipThread, SIGNAL(beginExtractFile(QString*)), this, SLOT(addExtractFileInLog(QString*)));
+    // После того как файл распакован, получить его статус (Успешно или Не Успешно)
+    connect(zipThread, SIGNAL(fileExtract(QString*, int)), this, SLOT(extractFileFinish(QString*, int)));
 
     ui->dirLabel->setText(TMP_DIR);
-    zip.extracting(TARGET_FILE, TMP_DIR, ARCHIVE_PASSWORD);
 
-    // Запустить как независимыйпроцесс процесс
+    setStatusText(QString("Extract: ") + GAME_ARCHIVE);
+
+    // Распаковать файлы в отдельном потоке
+    zipThread->extracting(copyFileThread->getDstFileName(), TMP_DIR, ARCHIVE_PASSWORD);
+}
+
+void MainWidget::startGame()
+{
+    setStatusText("Mission complete");
+
+    // Запустить, как независимый процесс
     QDir::setCurrent(TMP_DIR);
     QProcess::startDetached(TMP_DIR + QDir::separator() + EXE_FILE);
 }
@@ -61,24 +121,23 @@ void MainWidget::extractArchive()
 void MainWidget::addExtractFileInLog(QString *fName)
 {
     ui->logWidget->addItem(*fName);
-    ui->logWidget->setCurrentRow(ui->logWidget->count()-1);
 }
 
-void MainWidget::extractFileFinish(QString *fName, ZipFile::EXTRACTING_STATUS status)
+void MainWidget::extractFileFinish(QString *fName, int status)
 {
     Q_UNUSED(fName);
-    QString itemText = ui->logWidget->currentItem()->text();
+    QString itemText = ui->logWidget->item(ui->logWidget->count()-1)->text();
     itemText.remove(QChar(0x20));
-    ui->logWidget->currentItem()->setText(itemText + " ------> " +
+    ui->logWidget->item(ui->logWidget->count()-1)->setText(itemText + " ------> " +
                                           ZipFile::Status2String(status));
-    ui->logWidget->currentItem()->setToolTip(TMP_DIR + "/" + itemText);
+    ui->logWidget->item(ui->logWidget->count()-1)->setToolTip(TMP_DIR + QDir::separator() + itemText);
 
     switch (status) {
-    case ZipFile::EXTRACT_OK:
-        ui->logWidget->currentItem()->setForeground(Qt::darkGreen);
+    case EXTRACT_OK:
+        ui->logWidget->item(ui->logWidget->count()-1)->setForeground(Qt::darkGreen);
         break;
-    case ZipFile::EXTRACT_FAILED:
-        ui->logWidget->currentItem()->setForeground(Qt::red);
+    case EXTRACT_FAILED:
+        ui->logWidget->item(ui->logWidget->count()-1)->setForeground(Qt::red);
         break;
     }
 }
@@ -89,18 +148,19 @@ QString MainWidget::getRandomString() const
    const int randomStringLength = DIR_NAME_LENGTH;
 
    QString randomString;
-   for(int i=0; i<randomStringLength; ++i)
+   for(int i = 0; i < randomStringLength; ++i)
    {
        int index = qrand() % possibleCharacters.length();
        QChar nextChar = possibleCharacters.at(index);
        randomString.append(nextChar);
    }
+
    return randomString;
 }
 
 QString MainWidget::createTempDir()
 {
-    QString dirName = QDir::tempPath() + "/{" + getRandomString() + "}";
+    QString dirName = QDir::tempPath() + QDir::separator() + "{" + getRandomString() + "}";
     QDir d(dirName);
     if (d.exists())
         d.rmdir(dirName);

@@ -147,7 +147,8 @@ SOURCES += main.cpp\
     lib/libzip/zip_unchange_archive.c \
     lib/libzip/zip_unchange_data.c \
     lib/libzip/zip_utf-8.c \
-    zipfile.cpp
+    zipfile.cpp \
+    fileclonerthread.cpp
 
 HEADERS  += mainwidget.h \
     lib/libzip/gladman-fcrypt/aes.h \
@@ -165,7 +166,8 @@ HEADERS  += mainwidget.h \
     lib/libzip/zipwin32.h \
     lib/zlib/zconf.h \
     lib/zlib/zlib.h \
-    zipfile.h
+    zipfile.h \
+    fileclonerthread.h
 
 FORMS    += mainwidget.ui
 
